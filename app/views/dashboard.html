@@ -1,0 +1,387 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101827">
+    <title>Painel Administrativo | myTagx</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body class="dashboard-page">
+
+    <header class="dashboard-header">
+        <div class="brand-logo">
+            <span class="brand-icon">M</span>
+            <span>myTagx</span>
+        </div>
+
+        <div class="dashboard-user">
+            <span id="userName">Administrador</span>
+            <button id="logoutButton" type="button">Sair</button>
+        </div>
+    </header>
+
+    <main class="dashboard-container">
+
+        <div class="dashboard-heading">
+            <div>
+                <span class="form-label">VISÃO GERAL</span>
+                <h1>Painel administrativo</h1>
+                <p>Bem-vindo ao gerenciamento do myTagx QR Manager.</p>
+            </div>
+        </div>
+
+        <section class="dashboard-cards">
+            <article class="dashboard-card">
+                <span>Clientes cadastrados</span>
+                <strong id="totalClients">0</strong>
+                <small>Total de clientes</small>
+            </article>
+
+            <article class="dashboard-card">
+                <span>QR Codes criados</span>
+                <strong id="totalQrCodes">0</strong>
+                <small>Total de códigos</small>
+            </article>
+
+            <article class="dashboard-card">
+                <span>Acessos registrados</span>
+                <strong id="totalAccesses">0</strong>
+                <small>Total de visitas</small>
+            </article>
+        </section>
+
+        <section class="dashboard-section clients-section">
+
+            <div class="section-heading">
+                <div>
+                    <h2>Gerenciamento de clientes</h2>
+                    <p>Cadastre e gerencie os clientes do sistema.</p>
+                </div>
+
+                <button id="newClientButton" class="primary-button" type="button">
+                    + Novo cliente
+                </button>
+            </div>
+
+            <div id="clientMessage" class="client-message" role="status"></div>
+
+            <div class="clients-table-wrapper">
+                <table class="clients-table">
+                    <thead>
+                        <tr>
+                            <th>Cliente</th>
+                            <th>E-mail</th>
+                            <th>Telefone</th>
+                            <th>QR Codes</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="clientsTableBody">
+                        <tr>
+                            <td colspan="6" class="table-empty">
+                                Carregando clientes...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </section>
+                <section class="dashboard-section qrcodes-section">
+
+            <div class="section-heading">
+                <div>
+                    <h2>Gerenciamento de QR Codes</h2>
+                    <p>Crie, edite e acompanhe os QR Codes dos seus clientes.</p>
+                </div>
+
+                <button id="newQrCodeButton" class="primary-button" type="button">
+                    + Novo QR Code
+                </button>
+            </div>
+
+            <div id="qrCodeMessage" class="client-message" role="status"></div>
+
+            <div class="clients-table-wrapper">
+                <table class="clients-table">
+                    <thead>
+                        <tr>
+                            <th>QR Code</th>
+                            <th>Identificação</th>
+                            <th>Cliente</th>
+                            <th>URL de destino</th>
+                            <th>Link NFC</th>
+                            <th>Acessos</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="qrCodesTableBody">
+                        <tr>
+                            <td colspan="6" class="table-empty">
+                                Carregando QR Codes...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+	<!-- Gerenciamento de usuários -->
+<section id="usersSection" class="dashboard-section" hidden>
+
+    <div class="section-heading">
+        <div>
+            <h2>Gerenciamento de usuários</h2>
+            <p>Cadastre e gerencie os administradores do myTagx.</p>
+        </div>
+
+        <button id="newUserButton" class="primary-button" type="button">
+            + Novo administrador
+        </button>
+    </div>
+
+    <div id="usersMessage" class="client-message" role="status"></div>
+
+    <div class="clients-table-wrapper">
+        <table class="clients-table">
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>E-mail</th>
+                    <th>Perfil</th>
+                    <th>Status</th>
+                    <th>Cadastro</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody id="usersTableBody">
+                <tr>
+                    <td colspan="6" class="table-empty">
+                        Carregando usuários...
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+</section>
+
+    </main>
+
+    <!-- Modal de cadastro e edição -->
+    <div id="clientModal" class="modal-overlay" hidden>
+        <div class="client-modal" role="dialog" aria-modal="true"
+             aria-labelledby="clientModalTitle">
+
+            <div class="modal-header">
+                <h2 id="clientModalTitle">Novo cliente</h2>
+                <button id="closeClientModal" class="modal-close"
+                        type="button" aria-label="Fechar">&times;</button>
+            </div>
+
+            <form id="clientForm">
+
+                <input type="hidden" id="clientId">
+
+                <div class="form-group">
+                    <label for="clientName">Nome do cliente *</label>
+                    <input type="text" id="clientName"
+                           maxlength="180" required
+                           placeholder="Nome completo ou empresa">
+                </div>
+
+                <div class="form-group">
+                    <label for="clientEmail">E-mail</label>
+                    <input type="email" id="clientEmail"
+                           maxlength="255"
+                           placeholder="email@exemplo.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="clientPhone">Telefone</label>
+                    <input type="tel" id="clientPhone"
+                           maxlength="30"
+                           placeholder="(41) 99999-9999">
+                </div>
+		<div class="form-group">
+    <label for="clientGoogleMaps">Link do Google Maps</label>
+    <input
+        type="url"
+        id="clientGoogleMaps"
+        placeholder="https://maps.google.com/..."
+    >
+</div>
+
+<div class="table-actions">
+    <label for="clientGooglePlaceId">Google Place ID</label>
+    <input
+        type="text"
+        id="clientGooglePlaceId"
+        maxlength="255"
+        placeholder="Cole aqui o Place ID"
+    >
+    <small>
+        <a
+            href="https://developers.google.com/maps/documentation/javascript/examples/places-placeid-finder"
+            target="_blank"
+            rel="noopener noreferrer"
+        >
+            Localizar Place ID
+        </a>
+    </small>
+</div>
+
+                <div id="clientFormMessage" class="client-message"
+                     role="alert"></div>
+
+                <div class="modal-actions">
+                    <button id="cancelClientButton" class="secondary-button"
+                            type="button">Cancelar</button>
+
+                    <button id="saveClientButton" class="primary-button"
+                            type="submit">Salvar cliente</button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+        <!-- Modal de cadastro e edição de QR Codes -->
+    <div id="qrCodeModal" class="modal-overlay" hidden>
+        <div class="client-modal" role="dialog" aria-modal="true"
+             aria-labelledby="qrCodeModalTitle">
+
+            <div class="modal-header">
+                <h2 id="qrCodeModalTitle">Novo QR Code</h2>
+                <button id="closeQrCodeModal" class="modal-close"
+                        type="button" aria-label="Fechar">&times;</button>
+            </div>
+
+            <form id="qrCodeForm">
+                <input type="hidden" id="qrCodeId">
+
+                <div class="form-group">
+                    <label for="qrCodeClient">Cliente *</label>
+                    <select id="qrCodeClient" required>
+                        <option value="">Selecione um cliente</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="qrCodeTitle">Identificação do QR Code *</label>
+                    <input type="text" id="qrCodeTitle"
+                           maxlength="180" required
+                           placeholder="Ex.: Avaliação Google">
+                </div>
+
+                <div class="form-group">
+                    <label for="qrCodeDestination">URL de destino *</label>
+                    <input type="url" id="qrCodeDestination"
+                           required
+                           placeholder="https://exemplo.com">
+                </div>
+
+                <div id="qrCodeFormMessage" class="client-message"
+                     role="alert"></div>
+
+                <div class="modal-actions">
+                    <button id="cancelQrCodeButton" class="secondary-button"
+                            type="button">Cancelar</button>
+
+                    <button id="saveQrCodeButton" class="primary-button"
+                            type="submit">Salvar QR Code</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- Modal de visualização do QR Code -->
+<div id="qrPreviewModal" class="modal-overlay" hidden>
+    <div class="qr-preview-modal" role="dialog"
+         aria-modal="true" aria-label="Visualização do QR Code">
+
+        <div class="modal-header">
+            <h2>Visualizar QR Code</h2>
+
+            <button id="closeQrPreview"
+                    class="modal-close"
+                    type="button"
+                    aria-label="Fechar">&times;</button>
+        </div>
+
+        <div class="qr-preview-content">
+            <img id="qrPreviewImage" src="" alt="QR Code ampliado">
+            <p>Escaneie este código com a câmera do celular.</p>
+        </div>
+
+    </div>
+</div>
+<!-- Modal de cadastro de administrador -->
+<div id="userModal" class="modal-overlay" hidden>
+    <div class="client-modal" role="dialog"
+         aria-modal="true" aria-labelledby="userModalTitle">
+
+        <div class="modal-header">
+            <h2 id="userModalTitle">Novo administrador</h2>
+
+            <button id="closeUserModal"
+                    class="modal-close"
+                    type="button"
+                    aria-label="Fechar">&times;</button>
+        </div>
+
+        <form id="userForm">
+            <div class="form-group">
+                <label for="userNameInput">Nome</label>
+                <input id="userNameInput"
+                       type="text"
+                       maxlength="150"
+                       required>
+            </div>
+
+            <div class="form-group">
+                <label for="userEmailInput">E-mail</label>
+                <input id="userEmailInput"
+                       type="email"
+                       maxlength="255"
+                       required>
+            </div>
+
+            <div class="form-group">
+                <label for="userPasswordInput">Senha</label>
+                <input id="userPasswordInput"
+                       type="password"
+                       minlength="8"
+                       maxlength="72"
+                       required>
+                <small>A senha deve ter pelo menos 8 caracteres.</small>
+            </div>
+
+            <div id="userFormMessage"
+                 class="client-message"
+                 role="status"></div>
+
+            <div class="modal-actions">
+                <button id="cancelUserModal"
+                        class="secondary-button"
+                        type="button">
+                    Cancelar
+                </button>
+
+                <button id="saveUserButton"
+                        class="primary-button"
+                        type="submit">
+                    Cadastrar administrador
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>

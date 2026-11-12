@@ -1,0 +1,879 @@
+
+const userName = document.getElementById('userName');
+const logoutButton = document.getElementById('logoutButton');
+
+const clientsTableBody = document.getElementById('clientsTableBody');
+const totalClients = document.getElementById('totalClients');
+
+const clientModal = document.getElementById('clientModal');
+const clientForm = document.getElementById('clientForm');
+const clientId = document.getElementById('clientId');
+const clientName = document.getElementById('clientName');
+const clientEmail = document.getElementById('clientEmail');
+const clientPhone = document.getElementById('clientPhone');
+const clientGoogleMaps = document.getElementById('clientGoogleMaps');
+const clientGooglePlaceId = document.getElementById('clientGooglePlaceId');
+
+const newClientButton = document.getElementById('newClientButton');
+const closeClientModal = document.getElementById('closeClientModal');
+const cancelClientButton = document.getElementById('cancelClientButton');
+const saveClientButton = document.getElementById('saveClientButton');
+
+const clientMessage = document.getElementById('clientMessage');
+const clientFormMessage = document.getElementById('clientFormMessage');
+
+// Elementos do gerenciamento de QR Codes
+const qrCodesTableBody = document.getElementById('qrCodesTableBody');
+const totalQrCodes = document.getElementById('totalQrCodes');
+const totalAccesses = document.getElementById('totalAccesses');
+
+// Gerenciamento de usuários
+const usersSection = document.getElementById('usersSection');
+const usersTableBody = document.getElementById('usersTableBody');
+const newUserButton = document.getElementById('newUserButton');
+const usersMessage = document.getElementById('usersMessage');
+const userModal = document.getElementById('userModal');
+const userForm = document.getElementById('userForm');
+const userNameInput = document.getElementById('userNameInput');
+const userEmailInput = document.getElementById('userEmailInput');
+const userPasswordInput = document.getElementById('userPasswordInput');
+const userFormMessage = document.getElementById('userFormMessage');
+const closeUserModal = document.getElementById('closeUserModal');
+const cancelUserModal = document.getElementById('cancelUserModal');
+
+let currentUser = null;
+let users = [];
+
+const qrCodeModal = document.getElementById('qrCodeModal');
+// Visualização ampliada do QR Code
+const qrPreviewModal = document.getElementById('qrPreviewModal');
+const qrPreviewImage = document.getElementById('qrPreviewImage');
+const closeQrPreview = document.getElementById('closeQrPreview');
+const qrCodeForm = document.getElementById('qrCodeForm');
+const qrCodeId = document.getElementById('qrCodeId');
+const qrCodeClient = document.getElementById('qrCodeClient');
+const qrCodeTitle = document.getElementById('qrCodeTitle');
+const qrCodeDestination = document.getElementById('qrCodeDestination');
+
+const newQrCodeButton = document.getElementById('newQrCodeButton');
+const closeQrCodeModal = document.getElementById('closeQrCodeModal');
+const cancelQrCodeButton = document.getElementById('cancelQrCodeButton');
+const saveQrCodeButton = document.getElementById('saveQrCodeButton');
+
+const qrCodeMessage = document.getElementById('qrCodeMessage');
+const qrCodeFormMessage = document.getElementById('qrCodeFormMessage');
+
+let qrCodes = [];
+
+let clients = [];
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[character]);
+}
+
+async function apiRequest(url, options = {}) {
+    const response = await fetch(url, {
+        credentials: 'same-origin',
+        ...options,
+        headers: {
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...options.headers
+        }
+    });
+
+    if (response.status === 401) {
+        window.location.replace('/login');
+        throw new Error('Sessão expirada.');
+    }
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data.message || data.error || 'Não foi possível concluir a operação.');
+    }
+
+    return data;
+}
+
+function showMessage(element, message, type = 'error') {
+    element.textContent = message;
+    element.className = `client-message visible ${type}`;
+}
+
+function clearMessage(element) {
+    element.textContent = '';
+    element.className = 'client-message';
+}
+
+async function loadUser() {
+    try {
+        const data = await apiRequest('/api/me');
+
+	currentUser = data.user;
+        userName.textContent = data.user.name;
+
+	if (usersSection) {
+            usersSection.hidden = currentUser.role !== 'owner';
+
+	    if (currentUser.role === 'owner') {
+            	await loadUsers();
+    	    }
+        }
+
+    } catch (error) {
+        console.error('Erro ao carregar usuário:', error);
+        userName.textContent = 'Erro ao carregar';
+    }
+}
+
+function renderClients() {
+    totalClients.textContent = clients.length;
+
+    if (clients.length === 0) {
+        clientsTableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="table-empty">
+                    Nenhum cliente cadastrado.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    clientsTableBody.innerHTML = clients.map(client => `
+        <tr>
+            <td><strong>${escapeHtml(client.name)}</strong></td>
+            <td>${escapeHtml(client.email || '—')}</td>
+            <td>${escapeHtml(client.phone || '—')}</td>
+            <td>${Number(client.total_qr_codes || 0)}</td>
+            <td>
+                <span class="status-label ${client.active ? 'active' : 'inactive'}">
+                    ${client.active ? 'Ativo' : 'Inativo'}
+                </span>
+            </td>
+            <td>
+                <div class="table-actions">
+                    <button type="button" data-action="edit"
+                        data-id="${escapeHtml(client.id)}">Editar</button>
+
+                    <button type="button" data-action="status"
+                        data-id="${escapeHtml(client.id)}">
+                        ${client.active ? 'Desativar' : 'Ativar'}
+                    </button>
+
+                    <button type="button" data-action="delete"
+                        data-id="${escapeHtml(client.id)}">Excluir</button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function renderQrCodes() {
+    totalQrCodes.textContent = qrCodes.length;
+
+    totalAccesses.textContent = qrCodes.reduce(
+        (total, qr) => total + Number(qr.total_accesses || 0),
+        0
+    );
+
+    if (qrCodes.length === 0) {
+        qrCodesTableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="table-empty">
+                    Nenhum QR Code cadastrado.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    qrCodesTableBody.innerHTML = qrCodes.map(qr => `
+        <tr>
+	    <td>
+    <img
+        class="qr-code-thumbnail"
+        src="/api/qr-codes/${encodeURIComponent(qr.id)}/png"
+        alt="QR Code ${escapeHtml(qr.title)}"
+        loading="lazy"
+    >
+</td>
+            <td><strong>${escapeHtml(qr.title)}</strong></td>
+            <td>${escapeHtml(qr.client_name)}</td>
+            <td>
+                <a href="${escapeHtml(qr.destination_url)}"
+                   target="_blank" rel="noopener noreferrer">
+                    Acessar destino
+                </a>
+            </td>
+            <td>
+    <div class="table-actions">
+        <input
+            type="text"
+            readonly
+            value="https://mytagx.com.br/r/${encodeURIComponent(qr.code)}"
+            class="nfc-link-input"
+            aria-label="Link para NFC"
+        >
+        <button
+            type="button"
+            class="copy-nfc-button"
+            data-action="copy-nfc"
+            data-id="${escapeHtml(qr.id)}"
+        >
+            Copiar
+        </button>
+    </div>
+</td>
+<td>${Number(qr.total_accesses || 0)}</td>
+            <td>
+                <span class="status-label ${qr.active ? 'active' : 'inactive'}">
+                    ${qr.active ? 'Ativo' : 'Inativo'}
+                </span>
+            </td>
+            <td>
+                <div class="table-actions">
+                    <button type="button" data-action="edit"
+                            data-id="${escapeHtml(qr.id)}">Editar</button>
+                    <button type="button" data-action="status"
+                            data-id="${escapeHtml(qr.id)}">
+                        ${qr.active ? 'Desativar' : 'Ativar'}
+                    </button>
+                    <button type="button" data-action="download"
+                            data-id="${escapeHtml(qr.id)}">PNG</button>
+                    <button type="button" data-action="delete"
+                            data-id="${escapeHtml(qr.id)}">Excluir</button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Renderizar usuários
+function renderUsers() {
+    if (!usersTableBody) return;
+
+    if (users.length === 0) {
+        usersTableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="table-empty">
+                    Nenhum usuário cadastrado.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    usersTableBody.innerHTML = users.map(user => {
+        const roleName = user.role === 'owner'
+            ? 'Proprietário'
+            : 'Administrador';
+
+        const statusName = user.active ? 'Ativo' : 'Inativo';
+
+        const createdAt = user.created_at
+            ? new Date(user.created_at).toLocaleDateString('pt-BR')
+            : '—';
+
+        const actions = user.role === 'admin'
+            ? `
+	    <div class="table-actions">
+                <button
+                    type="button"
+                    data-action="status"
+                    data-id="${escapeHtml(user.id)}">
+                    ${user.active ? 'Desativar' : 'Ativar'}
+                </button>
+
+                <button
+                    type="button"
+                    data-action="delete"
+                    data-id="${escapeHtml(user.id)}">
+                    Excluir
+                </button>
+	    </div>
+            `
+            : 'Conta principal';
+
+        return `
+            <tr>
+                <td>${escapeHtml(user.name)}</td>
+                <td>${escapeHtml(user.email)}</td>
+                <td>${roleName}</td>
+                <td>
+                    <span class="status-label ${user.active ? 'active' : 'inactive'}">
+                        ${statusName}
+                    </span>
+                </td>
+                <td>${createdAt}</td>
+                <td>${actions}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Carregar usuários
+async function loadUsers() {
+    try {
+        clearMessage(usersMessage);
+
+        const data = await apiRequest('/api/users');
+
+        users = data.users || [];
+
+        renderUsers();
+
+    } catch (error) {
+        console.error('Erro ao carregar usuários:', error);
+
+        showMessage(
+            usersMessage,
+            error.message
+        );
+    }
+}
+
+async function loadQrCodes() {
+    try {
+        const data = await apiRequest('/api/qr-codes');
+
+        qrCodes = data.qr_codes || [];
+
+        renderQrCodes();
+
+    } catch (error) {
+        console.error('Erro ao carregar QR Codes:', error);
+
+        showMessage(qrCodeMessage, error.message);
+    }
+}
+
+async function loadClients() {
+    clientsTableBody.innerHTML = `
+        <tr>
+            <td colspan="6" class="table-empty">Carregando clientes...</td>
+        </tr>
+    `;
+
+    try {
+        const data = await apiRequest('/api/clients');
+        clients = data.clients || [];
+        renderClients();
+        renderQrCodeClients();
+        clearMessage(clientMessage);
+    } catch (error) {
+        console.error('Erro ao carregar clientes:', error);
+        clientsTableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="table-empty">
+                    Não foi possível carregar os clientes.
+                </td>
+            </tr>
+        `;
+        showMessage(clientMessage, error.message);
+    }
+}
+
+function renderQrCodeClients() {
+    const activeClients = clients.filter(client => client.active);
+
+    qrCodeClient.innerHTML = `
+        <option value="">Selecione um cliente</option>
+        ${activeClients.map(client => `
+            <option value="${escapeHtml(client.id)}">
+                ${escapeHtml(client.name)}
+            </option>
+        `).join('')}
+    `;
+}
+
+function openQrCodeModal(qr = null) {
+    clearMessage(qrCodeFormMessage);
+
+    qrCodeForm.reset();
+    qrCodeId.value = '';
+
+    if (qr) {
+        document.getElementById('qrCodeModalTitle').textContent =
+            'Editar QR Code';
+
+        qrCodeId.value = qr.id;
+        qrCodeClient.value = qr.client_id;
+        qrCodeTitle.value = qr.title;
+        qrCodeDestination.value = qr.destination_url;
+
+        qrCodeClient.disabled = true;
+    } else {
+        document.getElementById('qrCodeModalTitle').textContent =
+            'Novo QR Code';
+
+        qrCodeClient.disabled = false;
+    }
+
+    saveQrCodeButton.textContent = qr ? 'Salvar alterações' : 'Salvar QR Code';
+
+    qrCodeModal.hidden = false;
+}
+
+newQrCodeButton.addEventListener('click', () => {
+    openQrCodeModal();
+});
+
+closeQrCodeModal.addEventListener('click', () => {
+    qrCodeModal.hidden = true;
+});
+
+cancelQrCodeButton.addEventListener('click', () => {
+    qrCodeModal.hidden = true;
+});
+
+qrCodeModal.addEventListener('click', event => {
+    if (event.target === qrCodeModal) {
+        qrCodeModal.hidden = true;
+    }
+});
+
+// Abrir QR Code ampliado ao clicar na miniatura
+qrCodesTableBody.addEventListener('click', event => {
+    const image = event.target.closest('.qr-code-thumbnail');
+
+    if (!image) return;
+
+    qrPreviewImage.src = image.src;
+    qrPreviewModal.hidden = false;
+});
+
+// Fechar visualização
+closeQrPreview.addEventListener('click', () => {
+    qrPreviewModal.hidden = true;
+    qrPreviewImage.src = '';
+});
+
+// Fechar clicando fora
+qrPreviewModal.addEventListener('click', event => {
+    if (event.target === qrPreviewModal) {
+        qrPreviewModal.hidden = true;
+        qrPreviewImage.src = '';
+    }
+});
+
+
+qrCodeForm.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    clearMessage(qrCodeFormMessage);
+
+    const id = qrCodeId.value;
+
+    const payload = {
+        title: qrCodeTitle.value.trim(),
+        destination_url: qrCodeDestination.value.trim()
+    };
+
+    if (!id) {
+        payload.client_id = qrCodeClient.value;
+    }
+
+    saveQrCodeButton.disabled = true;
+    saveQrCodeButton.textContent = 'Salvando...';
+
+    try {
+        await apiRequest(
+            id ? `/api/qr-codes/${encodeURIComponent(id)}` : '/api/qr-codes',
+            {
+                method: id ? 'PUT' : 'POST',
+                body: JSON.stringify(payload)
+            }
+        );
+
+        qrCodeModal.hidden = true;
+
+        await loadQrCodes();
+
+        showMessage(
+            qrCodeMessage,
+            id ? 'QR Code atualizado com sucesso.' : 'QR Code cadastrado com sucesso.',
+            'success'
+        );
+
+    } catch (error) {
+        showMessage(qrCodeFormMessage, error.message);
+
+    } finally {
+        saveQrCodeButton.disabled = false;
+        saveQrCodeButton.textContent = id ? 'Salvar alterações' : 'Salvar QR Code';
+    }
+});    
+
+qrCodesTableBody.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-action]');
+
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const id = button.dataset.id;
+    const qr = qrCodes.find(item => String(item.id) === id);
+
+    if (!qr) return;
+
+    if (action === 'copy-nfc') {
+    const nfcUrl =
+        `https://mytagx.com.br/r/${encodeURIComponent(qr.code)}`;
+
+    try {
+        await navigator.clipboard.writeText(nfcUrl);
+
+        showMessage(
+            qrCodeMessage,
+            'Link NFC copiado com sucesso!',
+            'success'
+        );
+
+    } catch (error) {
+        showMessage(
+            qrCodeMessage,
+            'Não foi possível copiar o link.',
+            'error'
+        );
+    }
+
+    return;
+}
+
+    if (action === 'edit') {
+        openQrCodeModal(qr);
+        return;
+    }
+
+    if (action === 'status') {
+        try {
+            await apiRequest(`/api/qr-codes/${encodeURIComponent(id)}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({ active: !qr.active })
+            });
+
+            await loadQrCodes();
+            showMessage(qrCodeMessage, 'Status atualizado com sucesso.', 'success');
+
+        } catch (error) {
+            showMessage(qrCodeMessage, error.message);
+        }
+
+        return;
+    }
+
+    if (action === 'download') {
+        const link = document.createElement('a');
+        link.href = `/api/qr-codes/${encodeURIComponent(id)}/png`;
+        link.download = `qrcode-${id}.png`;
+        link.click();
+        return;
+    }
+
+    if (action === 'delete') {
+        if (!confirm(`Deseja excluir o QR Code "${qr.title}"?`)) return;
+
+        try {
+            await apiRequest(`/api/qr-codes/${encodeURIComponent(id)}`, {
+                method: 'DELETE'
+            });
+
+            await loadQrCodes();
+            showMessage(qrCodeMessage, 'QR Code excluído com sucesso.', 'success');
+
+        } catch (error) {
+            showMessage(qrCodeMessage, error.message);
+        }
+    }
+});
+
+
+function openClientModal(client = null) {
+    clientForm.reset();
+    clearMessage(clientFormMessage);
+
+    if (client) {
+        document.getElementById('clientModalTitle').textContent = 'Editar cliente';
+        clientId.value = client.id;
+        clientName.value = client.name || '';
+        clientEmail.value = client.email || '';
+        clientPhone.value = client.phone || '';
+	clientGoogleMaps.value = client.google_maps_url || '';
+	clientGooglePlaceId.value = client.google_place_id || '';
+    } else {
+        document.getElementById('clientModalTitle').textContent = 'Novo cliente';
+        clientId.value = '';
+	clientGoogleMaps.value = '';
+	clientGooglePlaceId.value = '';
+    }
+
+    clientModal.hidden = false;
+    clientName.focus();
+}
+
+function closeModal() {
+    clientModal.hidden = true;
+    clientForm.reset();
+    clearMessage(clientFormMessage);
+}
+
+newClientButton.addEventListener('click', () => openClientModal());
+
+closeClientModal.addEventListener('click', closeModal);
+cancelClientButton.addEventListener('click', closeModal);
+
+clientModal.addEventListener('click', event => {
+    if (event.target === clientModal) {
+        closeModal();
+    }
+});
+
+clientForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    clearMessage(clientFormMessage);
+
+    const id = clientId.value;
+
+    const payload = {
+        name: clientName.value.trim(),
+        email: clientEmail.value.trim(),
+        phone: clientPhone.value.trim(),
+	google_maps_url: clientGoogleMaps.value.trim(),
+        google_place_id: clientGooglePlaceId.value.trim()
+    };
+
+    if (!payload.name) {
+        showMessage(clientFormMessage, 'Informe o nome do cliente.');
+        clientName.focus();
+        return;
+    }
+
+    saveClientButton.disabled = true;
+    saveClientButton.textContent = 'Salvando...';
+
+    try {
+        await apiRequest(
+            id ? `/api/clients/${encodeURIComponent(id)}` : '/api/clients',
+            {
+                method: id ? 'PUT' : 'POST',
+                body: JSON.stringify(payload)
+            }
+        );
+
+        closeModal();
+        await loadClients();
+
+        showMessage(
+            clientMessage,
+            id ? 'Cliente atualizado com sucesso.' : 'Cliente cadastrado com sucesso.',
+            'success'
+        );
+    } catch (error) {
+        showMessage(clientFormMessage, error.message);
+    } finally {
+        saveClientButton.disabled = false;
+        saveClientButton.textContent = 'Salvar cliente';
+    }
+});
+
+clientsTableBody.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-action]');
+
+    if (!button) return;
+
+    const id = button.dataset.id;
+    const action = button.dataset.action;
+    const client = clients.find(item => String(item.id) === String(id));
+
+    if (!client) return;
+
+    if (action === 'edit') {
+        openClientModal(client);
+        return;
+    }
+
+    if (action === 'status') {
+        const newStatus = !client.active;
+
+        try {
+            await apiRequest(`/api/clients/${encodeURIComponent(id)}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({ active: newStatus })
+            });
+
+            await loadClients();
+            showMessage(
+                clientMessage,
+                newStatus ? 'Cliente ativado.' : 'Cliente desativado.',
+                'success'
+            );
+        } catch (error) {
+            showMessage(clientMessage, error.message);
+        }
+
+        return;
+    }
+
+    if (action === 'delete') {
+        const confirmed = window.confirm(
+            `Deseja realmente excluir o cliente "${client.name}"?`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            await apiRequest(`/api/clients/${encodeURIComponent(id)}`, {
+                method: 'DELETE'
+            });
+
+            await loadClients();
+            showMessage(clientMessage, 'Cliente excluído com sucesso.', 'success');
+        } catch (error) {
+            showMessage(clientMessage, error.message);
+        }
+    }
+});
+
+logoutButton.addEventListener('click', async () => {
+    logoutButton.disabled = true;
+    logoutButton.textContent = 'Saindo...';
+
+    try {
+        await apiRequest('/api/logout', { method: 'POST' });
+        window.location.replace('/login');
+    } catch (error) {
+        console.error('Erro no logout:', error);
+        logoutButton.disabled = false;
+        logoutButton.textContent = 'Sair';
+        alert('Não foi possível encerrar a sessão. Tente novamente.');
+    }
+});
+
+// Abrir modal de novo administrador
+newUserButton.addEventListener('click', () => {
+    clearMessage(userFormMessage);
+    userForm.reset();
+    userModal.hidden = false;
+    userNameInput.focus();
+});
+
+// Fechar modal de administrador
+function closeUserModalWindow() {
+    userModal.hidden = true;
+    userForm.reset();
+    clearMessage(userFormMessage);
+}
+
+closeUserModal.addEventListener('click', closeUserModalWindow);
+
+cancelUserModal.addEventListener('click', closeUserModalWindow);
+
+// Fechar clicando fora do modal
+userModal.addEventListener('click', event => {
+    if (event.target === userModal) {
+        closeUserModalWindow();
+    }
+});
+
+// Cadastrar novo administrador
+userForm.addEventListener('submit', async event => {
+    event.preventDefault();
+
+    clearMessage(userFormMessage);
+
+    const name = userNameInput.value.trim();
+    const email = userEmailInput.value.trim();
+    const password = userPasswordInput.value;
+
+    try {
+        await apiRequest('/api/users', {
+            method: 'POST',
+            body: JSON.stringify({
+                name,
+                email,
+                password
+            })
+        });
+
+        closeUserModalWindow();
+
+        await loadUsers();
+
+        showMessage(
+            usersMessage,
+            'Administrador cadastrado com sucesso.',
+            'success'
+        );
+
+    } catch (error) {
+        showMessage(userFormMessage, error.message);
+    }
+});
+
+// Ações da tabela de usuários
+usersTableBody.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-action]');
+
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const id = button.dataset.id;
+
+    const user = users.find(item => String(item.id) === String(id));
+
+    if (!user || user.role !== 'admin') return;
+
+    try {
+        clearMessage(usersMessage);
+
+        if (action === 'status') {
+            await apiRequest(`/api/users/${encodeURIComponent(id)}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    active: !user.active
+                })
+            });
+
+            await loadUsers();
+
+            showMessage(
+                usersMessage,
+                `Administrador ${user.active ? 'desativado' : 'ativado'} com sucesso.`,
+                'success'
+            );
+        }
+
+        if (action === 'delete') {
+            const confirmed = window.confirm(
+                `Deseja realmente excluir o administrador ${user.name}?`
+            );
+
+            if (!confirmed) return;
+
+            await apiRequest(`/api/users/${encodeURIComponent(id)}`, {
+                method: 'DELETE'
+            });
+
+            await loadUsers();
+
+            showMessage(
+                usersMessage,
+                'Administrador excluído com sucesso.',
+                'success'
+            );
+        }
+
+    } catch (error) {
+        showMessage(usersMessage, error.message);
+    }
+});
+
+loadUser();
+loadClients();
+loadQrCodes();

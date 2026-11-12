@@ -1,0 +1,1037 @@
+
+require('dotenv').config();
+
+const express = require('express');
+const helmet = require('helmet');
+const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
+const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
+const { Pool } = require('pg');
+const crypto = require('crypto');
+const QRCode = require('qrcode');
+
+const app = express();
+const PORT = 3000;
+
+const pool = new Pool({
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT || 5432),
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD
+});
+
+if (!process.env.SESSION_SECRET) {
+    throw new Error('SESSION_SECRET não configurada');
+}
+
+app.set('trust proxy', 1);
+
+app.use(helmet());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+// Arquivos estáticos da interface
+app.use(express.static(__dirname + '/public'));
+
+// Sessões persistentes no PostgreSQL
+app.use(session({
+    store: new PgSession({
+        pool,
+        tableName: 'user_sessions',
+        createTableIfMissing: true
+    }),
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 1000 * 60 * 60 * 8
+    }
+}));
+// Arquivos estáticos da interface
+app.use(express.static(__dirname + '/public'));
+// Limite de tentativas de login
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        status: 'error',
+        message: 'Muitas tentativas. Aguarde 15 minutos.'
+    }
+});
+
+// Verificação de autenticação
+function requireAuth(req, res, next) {
+    if (!req.session.user) {
+        return res.status(401).json({
+            status: 'error',
+            message: 'Autenticação necessária'
+        });
+    }
+
+    next();
+}
+
+// Verificação de acesso exclusivo do proprietário
+function requireOwner(req, res, next) {
+    if (!req.session.user || req.session.user.role !== 'owner') {
+        return res.status(403).json({
+            status: 'error',
+            message: 'Acesso permitido somente ao proprietário'
+        });
+    }
+
+    next();
+}
+
+// Health check
+app.get('/health', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT current_database() AS database, current_user AS user'
+        );
+
+        res.json({
+            status: 'ok',
+            application: 'myTagx QR Manager',
+            database: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Erro no PostgreSQL:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Falha na conexão com o banco'
+        });
+    }
+});
+
+// Login
+app.post('/api/login', loginLimiter, async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (
+            typeof email !== 'string' ||
+            typeof password !== 'string' ||
+            !email.trim() ||
+            !password ||
+            email.length > 255 ||
+            password.length > 72
+        ) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'E-mail ou senha inválidos'
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT id, name, email, password_hash, role
+             FROM users
+             WHERE email = $1 AND active = TRUE`,
+            [email.trim().toLowerCase()]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'E-mail ou senha incorretos'
+            });
+        }
+
+        const user = result.rows[0];
+        const passwordValid = await bcrypt.compare(
+            password,
+            user.password_hash
+        );
+
+        if (!passwordValid) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'E-mail ou senha incorretos'
+            });
+        }
+
+        req.session.regenerate((error) => {
+            if (error) {
+                console.error('Erro ao criar sessão:', error.message);
+                return res.status(500).json({
+                    status: 'error',
+                    message: 'Não foi possível iniciar a sessão'
+                });
+            }
+
+            req.session.user = {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role
+            };
+
+            req.session.save((saveError) => {
+                if (saveError) {
+                    console.error('Erro ao salvar sessão:', saveError.message);
+                    return res.status(500).json({
+                        status: 'error',
+                        message: 'Não foi possível salvar a sessão'
+                    });
+                }
+
+                res.json({
+                    status: 'ok',
+                    message: 'Login realizado com sucesso',
+                    user: req.session.user
+                });
+            });
+        });
+
+    } catch (error) {
+        console.error('Erro no login:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro interno no servidor'
+        });
+    }
+});
+
+// Usuário autenticado
+app.get('/api/me', requireAuth, (req, res) => {
+    res.json({
+        status: 'ok',
+        user: req.session.user
+    });
+});
+
+// Logout
+app.post('/api/logout', requireAuth, (req, res) => {
+    req.session.destroy((error) => {
+        if (error) {
+            return res.status(500).json({
+                status: 'error',
+                message: 'Erro ao encerrar sessão'
+            });
+        }
+
+        res.clearCookie('connect.sid');
+        res.json({
+            status: 'ok',
+            message: 'Sessão encerrada'
+        });
+    });
+});
+
+// Rota de teste protegida
+app.get('/api/admin', requireAuth, (req, res) => {
+    res.json({
+        status: 'ok',
+        message: 'Área administrativa autorizada',
+        user: req.session.user
+    });
+});
+
+// ==========================================
+// API DE GERENCIAMENTO DE CLIENTES
+// ==========================================
+
+// Listar clientes
+app.get('/api/clients', requireAuth, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                c.*,
+                COUNT(q.id)::INTEGER AS total_qr_codes
+            FROM clients c
+            LEFT JOIN qr_codes q ON q.client_id = c.id
+            GROUP BY c.id
+            ORDER BY c.created_at DESC
+        `);
+
+        res.json({
+            status: 'ok',
+            clients: result.rows
+        });
+    } catch (error) {
+        console.error('Erro ao listar clientes:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao listar clientes'
+        });
+    }
+});
+
+// Consultar cliente
+app.get('/api/clients/:id', requireAuth, async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM clients WHERE id = $1',
+            [req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Cliente não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            client: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Erro ao consultar cliente:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao consultar cliente'
+        });
+    }
+});
+
+// Cadastrar cliente
+app.post('/api/clients', requireAuth, async (req, res) => {
+    try {
+        const name = String(req.body.name || '').trim();
+        const email = String(req.body.email || '').trim();
+        const phone = String(req.body.phone || '').trim();
+	const googleMapsUrl = String(req.body.google_maps_url || '').trim();
+	const googlePlaceId = String(req.body.google_place_id || '').trim();
+
+        if (!name) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'O nome do cliente é obrigatório'
+            });
+        }
+
+        const result = await pool.query(
+            `INSERT INTO clients (name, email, phone, google_maps_url, google_place_id)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING *`,
+            [name, email || null, phone || null, googleMapsUrl || null, googlePlaceId || null]
+        );
+
+        res.status(201).json({
+            status: 'ok',
+            message: 'Cliente cadastrado com sucesso',
+            client: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Erro ao cadastrar cliente:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao cadastrar cliente'
+        });
+    }
+});
+
+// Editar cliente
+app.put('/api/clients/:id', requireAuth, async (req, res) => {
+    try {
+        const name = String(req.body.name || '').trim();
+        const email = String(req.body.email || '').trim();
+        const phone = String(req.body.phone || '').trim();
+        const googleMapsUrl = String(req.body.google_maps_url || '').trim();
+	const googlePlaceId = String(req.body.google_place_id || '').trim();
+
+        if (!name) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'O nome do cliente é obrigatório'
+            });
+        }
+
+        const result = await pool.query(
+            `UPDATE clients
+             SET name = $1, email = $2, phone = $3, google_maps_url = $4, google_place_id = $5
+             WHERE id = $6
+             RETURNING *`,
+            [name, email || null, phone || null, googleMapsUrl || null, googlePlaceId || null, req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Cliente não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: 'Cliente atualizado com sucesso',
+            client: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Erro ao editar cliente:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao editar cliente'
+        });
+    }
+});
+
+// Ativar ou desativar cliente
+app.patch('/api/clients/:id/status', requireAuth, async (req, res) => {
+    try {
+        const { active } = req.body;
+
+        if (typeof active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Informe active como true ou false'
+            });
+        }
+
+        const result = await pool.query(
+            `UPDATE clients
+             SET active = $1
+             WHERE id = $2
+             RETURNING *`,
+            [active, req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Cliente não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: 'Status atualizado com sucesso',
+            client: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Erro ao alterar status:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao alterar status'
+        });
+    }
+});
+
+// Excluir cliente sem QR Codes vinculados
+app.delete('/api/clients/:id', requireAuth, async (req, res) => {
+    try {
+        const client = await pool.query(
+            'SELECT id FROM clients WHERE id = $1',
+            [req.params.id]
+        );
+
+        if (client.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Cliente não encontrado'
+            });
+        }
+
+        const qrCodes = await pool.query(
+            'SELECT COUNT(*)::INTEGER AS total FROM qr_codes WHERE client_id = $1',
+            [req.params.id]
+        );
+
+        if (qrCodes.rows[0].total > 0) {
+            return res.status(409).json({
+                status: 'error',
+                message: 'Este cliente possui QR Codes vinculados. Desative-o para preservar o histórico.'
+            });
+        }
+
+        await pool.query(
+            'DELETE FROM clients WHERE id = $1',
+            [req.params.id]
+        );
+
+        res.json({
+            status: 'ok',
+            message: 'Cliente excluído com sucesso'
+        });
+    } catch (error) {
+        console.error('Erro ao excluir cliente:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao excluir cliente'
+        });
+    }
+});
+// ==========================================
+// API DE GERENCIAMENTO DE QR CODES
+// ==========================================
+
+// Listar QR Codes
+app.get('/api/qr-codes', requireAuth, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                q.id,
+                q.client_id,
+                c.name AS client_name,
+                q.code,
+                q.title,
+                q.destination_url,
+                q.active,
+                q.created_at,
+                q.updated_at,
+                (
+                    SELECT COUNT(*)::INTEGER
+                    FROM qr_accesses a
+                    WHERE a.qr_code_id = q.id
+                ) AS total_accesses
+            FROM qr_codes q
+            INNER JOIN clients c ON c.id = q.client_id
+            ORDER BY q.created_at DESC
+        `);
+
+        res.json({
+            status: 'ok',
+            qr_codes: result.rows
+        });
+
+    } catch (error) {
+        console.error('Erro ao listar QR Codes:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao listar QR Codes'
+        });
+    }
+});
+// Cadastrar novo QR Code
+app.post('/api/qr-codes', requireAuth, async (req, res) => {
+    try {
+        const { client_id, title, destination_url } = req.body;
+
+        if (!client_id || !title || !destination_url) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Cliente, título e URL de destino são obrigatórios'
+            });
+        }
+
+        let parsedUrl;
+
+        try {
+            parsedUrl = new URL(destination_url);
+        } catch {
+            return res.status(400).json({
+                status: 'error',
+                message: 'URL de destino inválida'
+            });
+        }
+
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            return res.status(400).json({
+                status: '400',
+                message: 'A URL deve utilizar HTTP ou HTTPS'
+            });
+        }
+
+        const client = await pool.query(
+            'SELECT id FROM clients WHERE id = $1 AND active = true',
+            [client_id]
+        );
+
+        if (client.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Cliente não encontrado ou inativo'
+            });
+        }
+
+        const code = crypto.randomBytes(18).toString('hex');
+
+        const result = await pool.query(`
+            INSERT INTO qr_codes
+                (client_id, code, title, destination_url)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+        `, [
+            client_id,
+            code,
+            title.trim(),
+            parsedUrl.toString()
+        ]);
+
+        res.status(201).json({
+            status: 'ok',
+            message: 'QR Code cadastrado com sucesso',
+            qr_code: result.rows[0],
+            redirect_url: `${req.protocol}://${req.get('host')}/r/${code}`
+        });
+
+    } catch (error) {
+        console.error('Erro ao cadastrar QR Code:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao cadastrar QR Code'
+        });
+    }
+});
+// Editar QR Code
+app.put('/api/qr-codes/:id', requireAuth, async (req, res) => {
+    try {
+        const { title, destination_url } = req.body;
+
+        if (!title || !destination_url || !title.trim()) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Título e URL de destino são obrigatórios'
+            });
+        }
+
+        let parsedUrl;
+
+        try {
+            parsedUrl = new URL(destination_url);
+        } catch {
+            return res.status(400).json({
+                status: 'error',
+                message: 'URL de destino inválida'
+            });
+        }
+
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'A URL deve utilizar HTTP ou HTTPS'
+            });
+        }
+
+        const result = await pool.query(`
+            UPDATE qr_codes
+            SET title = $1,
+                destination_url = $2,
+                updated_at = NOW()
+            WHERE id = $3
+            RETURNING *
+        `, [
+            title.trim(),
+            parsedUrl.toString(),
+            req.params.id
+        ]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'QR Code não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: 'QR Code atualizado com sucesso',
+            qr_code: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('Erro ao editar QR Code:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao editar QR Code'
+        });
+    }
+});
+// Alterar status do QR Code
+app.patch('/api/qr-codes/:id/status', requireAuth, async (req, res) => {
+    try {
+        const { active } = req.body;
+
+        if (typeof active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Informe um status válido'
+            });
+        }
+
+        const result = await pool.query(`
+            UPDATE qr_codes
+            SET active = $1,
+                updated_at = NOW()
+            WHERE id = $2
+            RETURNING *
+        `, [active, req.params.id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'QR Code não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: active
+                ? 'QR Code ativado com sucesso'
+                : 'QR Code desativado com sucesso',
+            qr_code: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('Erro ao alterar status do QR Code:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao alterar status do QR Code'
+        });
+    }
+});
+// Excluir QR Code sem histórico de acessos
+app.delete('/api/qr-codes/:id', requireAuth, async (req, res) => {
+    try {
+        const qrCode = await pool.query(
+            'SELECT id FROM qr_codes WHERE id = $1',
+            [req.params.id]
+        );
+
+        if (qrCode.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'QR Code não encontrado'
+            });
+        }
+
+        const accesses = await pool.query(
+            'SELECT COUNT(*)::INTEGER AS total FROM qr_accesses WHERE qr_code_id = $1',
+            [req.params.id]
+        );
+
+        if (accesses.rows[0].total > 0) {
+            return res.status(409).json({
+                status: 'error',
+                message: 'Este QR Code possui histórico de acessos. Desative-o para preservar os dados.'
+            });
+        }
+
+        await pool.query(
+            'DELETE FROM qr_codes WHERE id = $1',
+            [req.params.id]
+        );
+
+        res.json({
+            status: 'ok',
+            message: 'QR Code excluído com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro ao excluir QR Code:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao excluir QR Code'
+        });
+    }
+});
+// ==========================================
+// REDIRECIONAMENTO PUBLICO DOS QR CODES
+// ==========================================
+
+app.get('/r/:code', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                q.id,
+                q.destination_url
+            FROM qr_codes q
+            INNER JOIN clients c ON c.id = q.client_id
+            WHERE q.code = $1
+              AND q.active = true
+              AND c.active = true
+        `, [req.params.code]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('QR Code não encontrado ou desativado.');
+        }
+
+        const qrCode = result.rows[0];
+
+        const ipHash = crypto
+            .createHash('sha256')
+            .update(`${process.env.SESSION_SECRET}:${req.ip}`)
+            .digest('hex');
+
+        try {
+            await pool.query(`
+                INSERT INTO qr_accesses
+                    (qr_code_id, user_agent, ip_hash)
+                VALUES ($1, $2, $3)
+            `, [
+                qrCode.id,
+                req.get('user-agent') || null,
+                ipHash
+            ]);
+        } catch (accessError) {
+            console.error('Erro ao registrar acesso:', accessError.message);
+        }
+
+        return res.redirect(302, qrCode.destination_url);
+
+    } catch (error) {
+        console.error('Erro no redirecionamento QR:', error.message);
+
+        return res.status(500).send('Erro interno ao processar QR Code.');
+    }
+});
+// Gerar imagem PNG do QR Code
+app.get('/api/qr-codes/:id/png', requireAuth, async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT code, title FROM qr_codes WHERE id = $1',
+            [req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'QR Code não encontrado'
+            });
+        }
+
+        const qrCode = result.rows[0];
+
+        const redirectUrl = `https://mytagx.com.br/r/${qrCode.code}`;
+
+        const image = await QRCode.toBuffer(redirectUrl, {
+            type: 'png',
+            width: 1000,
+            margin: 3,
+            errorCorrectionLevel: 'H'
+        });
+
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="qrcode-${qrCode.code}.png"`
+        );
+
+        res.send(image);
+
+    } catch (error) {
+        console.error('Erro ao gerar PNG:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao gerar imagem do QR Code'
+        });
+    }
+});
+
+// ==========================================
+// GERENCIAMENTO DE USUÁRIOS
+// ==========================================
+
+// Listar usuários (somente proprietário)
+app.get('/api/users', requireOwner, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT id, name, email, role, active, created_at
+            FROM users
+            ORDER BY id ASC
+        `);
+
+        res.json({
+            status: 'ok',
+            users: result.rows
+        });
+
+    } catch (error) {
+        console.error('Erro ao listar usuários:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao consultar usuários'
+        });
+    }
+});
+
+// Cadastrar administrador (somente proprietário)
+app.post('/api/users', requireOwner, async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+
+        if (
+            typeof name !== 'string' ||
+            typeof email !== 'string' ||
+            typeof password !== 'string' ||
+            !name.trim() ||
+            !email.trim() ||
+            password.length < 8 ||
+            password.length > 72 ||
+            name.trim().length > 150 ||
+            email.trim().length > 255
+        ) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Dados inválidos. A senha deve ter pelo menos 8 caracteres.'
+            });
+        }
+
+        const passwordHash = await bcrypt.hash(password, 12);
+
+        const result = await pool.query(`
+            INSERT INTO users (name, email, password_hash, role)
+            VALUES ($1, $2, $3, 'admin')
+            RETURNING id, name, email, role, active, created_at
+        `, [
+            name.trim(),
+            email.trim().toLowerCase(),
+            passwordHash
+        ]);
+
+        res.status(201).json({
+            status: 'ok',
+            message: 'Administrador cadastrado com sucesso',
+            user: result.rows[0]
+        });
+
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({
+                status: 'error',
+                message: 'Este e-mail já está cadastrado'
+            });
+        }
+
+        console.error('Erro ao cadastrar administrador:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao cadastrar administrador'
+        });
+    }
+});
+
+// Ativar ou desativar administrador (somente proprietário)
+app.patch('/api/users/:id/status', requireOwner, async (req, res) => {
+    try {
+        const { active } = req.body;
+        const userId = Number(req.params.id);
+
+        if (!Number.isSafeInteger(userId) || userId <= 0 ||
+            typeof active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Dados inválidos'
+            });
+        }
+
+        if (userId === Number(req.session.user.id)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Você não pode desativar sua própria conta'
+            });
+        }
+
+        const result = await pool.query(`
+            UPDATE users
+            SET active = $1
+            WHERE id = $2 AND role = 'admin'
+            RETURNING id, name, email, role, active
+        `, [active, userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Administrador não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: 'Status atualizado com sucesso',
+            user: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('Erro ao atualizar usuário:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao atualizar usuário'
+        });
+    }
+});
+
+// Excluir administrador (somente proprietário)
+app.delete('/api/users/:id', requireOwner, async (req, res) => {
+    try {
+        const userId = Number(req.params.id);
+
+        if (!Number.isSafeInteger(userId) || userId <= 0) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'ID inválido'
+            });
+        }
+
+        if (userId === Number(req.session.user.id)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Você não pode excluir sua própria conta'
+            });
+        }
+
+        const result = await pool.query(`
+            DELETE FROM users
+            WHERE id = $1 AND role = 'admin'
+            RETURNING id
+        `, [userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Administrador não encontrado'
+            });
+        }
+
+        res.json({
+            status: 'ok',
+            message: 'Administrador excluído com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro ao excluir administrador:', error.message);
+
+        res.status(500).json({
+            status: 'error',
+            message: 'Erro ao excluir administrador'
+        });
+    }
+});
+
+// Página inicial
+app.get('/', (req, res) => {
+    if (req.session.user) {
+        return res.redirect('/dashboard');
+    }
+
+    res.redirect('/login');
+});
+
+// Tela de login
+app.get('/login', (req, res) => {
+    if (req.session.user) {
+        return res.redirect('/dashboard');
+    }
+
+    res.sendFile(__dirname + '/public/login.html');
+});
+
+// Painel administrativo protegido
+app.get('/dashboard', (req, res) => {
+    if (!req.session.user) {
+        return res.redirect('/login');
+    }
+
+    res.sendFile(__dirname + '/views/dashboard.html');
+});
+// Inicialização
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`myTagx QR Manager iniciado na porta ${PORT}`);
+});

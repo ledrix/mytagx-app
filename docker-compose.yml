@@ -1,0 +1,19 @@
+services:
+  mytagx_qr_app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: mytagx_qr_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - mytagx_network
+    volumes:
+      - ./storage/qrcodes:/app/storage/qrcodes
+
+networks:
+  mytagx_network:
+    external: true
